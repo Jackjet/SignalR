@@ -81,13 +81,13 @@ function appendLine(line, color) {
     }
     child.innerText = line;
     document.getElementById('messages').appendChild(child);
-}
+});
 
-function addUserOnline(id, userName) {
-    var user = document.createElement('li');
-    user.innerText = userName;
-    user.id = id;
-    document.getElementById('users').appendChild(user);
+function addUserOnline (user) {
+    var userLi = document.createElement('li');
+    userLi.innerText = user.Name;
+    userLi.id = user.ConnectionId;
+    document.getElementById('users').appendChild(userLi);
 }
 
 function getParameterByName(name, url) {
