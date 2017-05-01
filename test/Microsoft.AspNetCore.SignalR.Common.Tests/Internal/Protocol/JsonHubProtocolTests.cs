@@ -77,7 +77,7 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
             var protocol = new JsonHubProtocol(jsonSerializer);
             var message = protocol.ParseMessage(Encoding.UTF8.GetBytes(input), binder);
 
-            Assert.Equal(expectedMessage, message);
+            Assert.Equal(expectedMessage, message, TestEqualityComparer.Instance);
         }
 
         private class CustomObject : IEquatable<CustomObject>
@@ -104,13 +104,13 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
                 return 0;
             }
 
-            public bool Equals(CustomObject other)
+            public bool Equals(CustomObject right)
             {
-                return string.Equals(StringProp, other.StringProp, StringComparison.Ordinal) &&
-                    DoubleProp == other.DoubleProp &&
-                    IntProp == other.IntProp &&
-                    DateTime.Equals(DateTimeProp, other.DateTimeProp) &&
-                    NullProp == other.NullProp;
+                return string.Equals(StringProp, right.StringProp, StringComparison.Ordinal) &&
+                    DoubleProp == right.DoubleProp &&
+                    IntProp == right.IntProp &&
+                    DateTime.Equals(DateTimeProp, right.DateTimeProp) &&
+                    NullProp == right.NullProp;
             }
         }
 
@@ -135,7 +135,7 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
 
             public Type GetReturnType(string invocationId)
             {
-                switch(_expectedMessage)
+                switch (_expectedMessage)
                 {
                     case CompletionMessage m:
                         return m.Result?.GetType() ?? typeof(object);
@@ -144,6 +144,51 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
                     default:
                         throw new InvalidOperationException("Unexpected binder call");
                 }
+            }
+        }
+
+        private class TestEqualityComparer : IEqualityComparer<HubMessage>
+        {
+            public static readonly TestEqualityComparer Instance = new TestEqualityComparer();
+
+            private TestEqualityComparer() { }
+
+            public bool Equals(HubMessage x, HubMessage y)
+            {
+                if (!string.Equals(x.InvocationId, y.InvocationId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                return InvocationMessagesEqual(x, y) || StreamItemMessagesEqual(x, y) || CompletionMessagesEqual(x, y);
+            }
+
+            private bool CompletionMessagesEqual(HubMessage x, HubMessage y)
+            {
+                return x is CompletionMessage left && y is CompletionMessage right &&
+                    string.Equals(left.Error, right.Error, StringComparison.Ordinal) &&
+                    Equals(left.Result, right.Result) &&
+                    left.HasResult == right.HasResult;
+            }
+
+            private bool StreamItemMessagesEqual(HubMessage x, HubMessage y)
+            {
+                return x is StreamItemMessage left && y is StreamItemMessage right &&
+                    Equals(left.Item, right.Item);
+            }
+
+            private bool InvocationMessagesEqual(HubMessage x, HubMessage y)
+            {
+                return x is InvocationMessage left && y is InvocationMessage right &&
+                    string.Equals(left.Target, right.Target, StringComparison.Ordinal) &&
+                    Enumerable.SequenceEqual(left.Arguments, right.Arguments) &&
+                    left.NonBlocking == right.NonBlocking;
+            }
+
+            public int GetHashCode(HubMessage obj)
+            {
+                // We never use these in a hash-table
+                return 0;
             }
         }
     }

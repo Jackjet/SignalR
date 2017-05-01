@@ -132,7 +132,7 @@ namespace Microsoft.AspNetCore.SignalR.Client
             _logger.LogTrace("Preparing invocation of '{0}', with return type '{1}' and {2} args", methodName, returnType.AssemblyQualifiedName, args.Length);
 
             // Create an invocation descriptor. Client invocations are always blocking
-            var invocationMessage = new InvocationMessage(GetNextId().ToString(), nonBlocking: false, target: methodName, arguments: args);
+            var invocationMessage = new InvocationMessage(GetNextId(), nonBlocking: false, target: methodName, arguments: args);
 
             // I just want an excuse to use 'irq' as a variable name...
             _logger.LogDebug("Registering Invocation ID '{0}' for tracking", invocationMessage.InvocationId);

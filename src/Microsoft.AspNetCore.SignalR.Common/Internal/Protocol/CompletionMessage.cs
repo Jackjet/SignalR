@@ -6,7 +6,7 @@ using Microsoft.Extensions.Internal;
 
 namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 {
-    public class CompletionMessage : HubMessage, IEquatable<CompletionMessage>
+    public class CompletionMessage : HubMessage
     {
         public string Error { get; }
         public object Result { get; }
@@ -21,29 +21,6 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
             Error = error;
             Result = result;
             HasResult = hasResult;
-        }
-
-        public override bool Equals(object obj)
-        {
-            return obj is CompletionMessage m && Equals(m);
-        }
-
-        public override int GetHashCode()
-        {
-            var combiner = new HashCodeCombiner();
-            combiner.Add(InvocationId);
-            combiner.Add(Error);
-            combiner.Add(Result);
-            combiner.Add(HasResult);
-            return combiner.CombinedHash;
-        }
-
-        public bool Equals(CompletionMessage other)
-        {
-            return string.Equals(InvocationId, other.InvocationId, StringComparison.Ordinal) &&
-                string.Equals(Error, other.Error, StringComparison.Ordinal) &&
-                Equals(Result, other.Result) &&
-                HasResult == other.HasResult;
         }
 
         public override string ToString()
