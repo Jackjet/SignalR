@@ -23,12 +23,9 @@ namespace ChatSample
             _userTracker = userTracker;
         }
 
-        public Task<IEnumerable<UserDetails>> UsersOnline
+        public Task<IEnumerable<UserDetails>> GetUsersOnline()
         {
-            get
-            {
-                return _userTracker.UsersOnline();
-            }
+            return _userTracker.UsersOnline();
         }
 
         public virtual Task OnUserJoined(UserDetails user)
