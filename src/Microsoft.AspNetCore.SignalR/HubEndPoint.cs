@@ -173,6 +173,8 @@ namespace Microsoft.AspNetCore.SignalR
                                 // incoming messages on this connection.
                                 var ignore = ProcessInvocation(connection, protocol, invocationMessage, cts, completion);
                                 break;
+
+                            // Other kind of message we weren't expecting
                             default:
                                 _logger.LogError("Received unsupported message of type '{messageType}'", hubMessage.GetType().FullName);
                                 throw new NotSupportedException($"Received unsupported message: {hubMessage}");

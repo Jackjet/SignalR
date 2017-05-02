@@ -37,7 +37,7 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
         /// <param name="payloadSerializer">The <see cref="JsonSerializer"/> to use to serialize application payloads (arguments, results, etc.).</param>
         public JsonHubProtocol(JsonSerializer payloadSerializer)
         {
-            if(payloadSerializer == null)
+            if (payloadSerializer == null)
             {
                 throw new ArgumentNullException(nameof(payloadSerializer));
             }
@@ -70,21 +70,35 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
         {
             using (var reader = new JsonTextReader(new StreamReader(input)))
             {
-                // PERF: Could probably use the JsonTextReader directly for better perf and fewer allocations
-                var json = _payloadSerializer.Deserialize<JObject>(reader);
-                if (json == null)
+                try
                 {
-                    return null;
-                }
+                    // PERF: Could probably use the JsonTextReader directly for better perf and fewer allocations
+                    var token = JToken.ReadFrom(reader);
+                    if (token == null)
+                    {
+                        return null;
+                    }
 
-                // Determine the type of the message
-                var type = json.Value<int>(TypePropertyName);
-                switch (type)
+                    if (token.Type != JTokenType.Object)
+                    {
+                        throw new FormatException($"Unexpected JSON Token Type '{token.Type}'. Expected a JSON Object.");
+                    }
+
+                    var json = (JObject)token;
+
+                    // Determine the type of the message
+                    var type = GetRequiredProperty<int>(json, TypePropertyName, JTokenType.Integer);
+                    switch (type)
+                    {
+                        case InvocationMessageType: return BindInvocationMessage(json, binder);
+                        case ResultMessageType: return BindResultMessage(json, binder);
+                        case CompletionMessageType: return BindCompletionMessage(json, binder);
+                        default: throw new FormatException($"Unknown message type: {type}");
+                    }
+                }
+                catch (JsonReaderException jrex)
                 {
-                    case InvocationMessageType: return BindInvocationMessage(json, binder);
-                    case ResultMessageType: return BindResultMessage(json, binder);
-                    case CompletionMessageType: return BindCompletionMessage(json, binder);
-                    default: throw new FormatException($"Unknown message type: {type}");
+                    throw new FormatException("Error reading JSON.", jrex);
                 }
             }
         }
@@ -170,20 +184,19 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 
         private InvocationMessage BindInvocationMessage(JObject json, IInvocationBinder binder)
         {
-            var invocationId = json.Value<string>(InvocationIdPropertyName);
-            var target = json.Value<string>(TargetPropertyName);
+            var invocationId = GetRequiredProperty<string>(json, InvocationIdPropertyName, JTokenType.String);
+            var target = GetRequiredProperty<string>(json, TargetPropertyName, JTokenType.String);
+            var nonBlocking = GetOptionalProperty<bool>(json, NonBlockingPropertyName, JTokenType.Boolean);
 
-            var nonBlocking = false;
-            var nonBlockingProp = json.Property(NonBlockingPropertyName);
-            if (nonBlockingProp != null)
-            {
-                nonBlocking = nonBlockingProp.Value.Value<bool>();
-            }
+            var args = GetRequiredProperty<JArray>(json, ArgumentsPropertyName, JTokenType.Array);
 
             var paramTypes = binder.GetParameterTypes(target);
-            var arguments = new object[paramTypes.Length];
+            var arguments = new object[args.Count];
+            if (paramTypes.Length != arguments.Length)
+            {
+                throw new FormatException($"Invocation provides {arguments.Length} argument(s) but target expects {paramTypes.Length}.");
+            }
 
-            var args = json.Value<JArray>(ArgumentsPropertyName);
             for (var i = 0; i < paramTypes.Length; i++)
             {
                 var paramType = paramTypes[i];
@@ -194,32 +207,65 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
             }
 
             return new InvocationMessage(invocationId, nonBlocking, target, arguments);
-        }
+    }
 
-        private StreamItemMessage BindResultMessage(JObject json, IInvocationBinder binder)
+    private StreamItemMessage BindResultMessage(JObject json, IInvocationBinder binder)
+    {
+        var invocationId = GetRequiredProperty<string>(json, InvocationIdPropertyName, JTokenType.String);
+        var result = GetRequiredProperty<JToken>(json, ResultPropertyName);
+
+        var returnType = binder.GetReturnType(invocationId);
+        return new StreamItemMessage(invocationId, result?.ToObject(returnType, _payloadSerializer));
+    }
+
+    private CompletionMessage BindCompletionMessage(JObject json, IInvocationBinder binder)
+    {
+        var invocationId = GetRequiredProperty<string>(json, InvocationIdPropertyName, JTokenType.String);
+        var error = GetOptionalProperty<string>(json, ErrorPropertyName, JTokenType.String);
+        var resultProp = json.Property(ResultPropertyName);
+        if (resultProp == null)
         {
-            var invocationId = json.Value<string>(InvocationIdPropertyName);
-            var result = json.Value<JToken>(ResultPropertyName);
-
+            return new CompletionMessage(invocationId, error, result: null, hasResult: false);
+        }
+        else
+        {
             var returnType = binder.GetReturnType(invocationId);
-            return new StreamItemMessage(invocationId, result?.ToObject(returnType, _payloadSerializer));
-        }
-
-        private CompletionMessage BindCompletionMessage(JObject json, IInvocationBinder binder)
-        {
-            var invocationId = json.Value<string>(InvocationIdPropertyName);
-            var error = json.Value<string>(ErrorPropertyName);
-            var resultProp = json.Property(ResultPropertyName);
-            if (resultProp == null)
-            {
-                return new CompletionMessage(invocationId, error, result: null, hasResult: false);
-            }
-            else
-            {
-                var returnType = binder.GetReturnType(invocationId);
-                var payload = resultProp.Value?.ToObject(returnType, _payloadSerializer);
-                return new CompletionMessage(invocationId, error, result: payload, hasResult: true);
-            }
+            var payload = resultProp.Value?.ToObject(returnType, _payloadSerializer);
+            return new CompletionMessage(invocationId, error, result: payload, hasResult: true);
         }
     }
+
+    private T GetOptionalProperty<T>(JObject json, string property, JTokenType expectedType = JTokenType.None, T defaultValue = default(T))
+    {
+        var prop = json[property];
+
+        if (prop == null)
+        {
+            return defaultValue;
+        }
+
+        return GetValue<T>(property, expectedType, prop);
+    }
+
+    private T GetRequiredProperty<T>(JObject json, string property, JTokenType expectedType = JTokenType.None)
+    {
+        var prop = json[property];
+
+        if (prop == null)
+        {
+            throw new FormatException($"Missing required property '{property}'.");
+        }
+
+        return GetValue<T>(property, expectedType, prop);
+    }
+
+    private static T GetValue<T>(string property, JTokenType expectedType, JToken prop)
+    {
+        if (expectedType != JTokenType.None && prop.Type != expectedType)
+        {
+            throw new FormatException($"Expected '{property}' to be of type {expectedType}.");
+        }
+        return prop.Value<T>();
+    }
+}
 }

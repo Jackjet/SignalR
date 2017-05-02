@@ -50,7 +50,7 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
         [MemberData(nameof(ProtocolTestData))]
         public async Task WriteMessage(HubMessage message, bool camelCase, NullValueHandling nullValueHandling, string expectedOutput)
         {
-            var jsonSerializer = new JsonSerializer()
+            var jsonSerializer = new JsonSerializer
             {
                 NullValueHandling = nullValueHandling,
                 ContractResolver = camelCase ? new CamelCasePropertyNamesContractResolver() : new DefaultContractResolver()
@@ -67,7 +67,7 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
         [MemberData(nameof(ProtocolTestData))]
         public void ParseMessage(HubMessage expectedMessage, bool camelCase, NullValueHandling nullValueHandling, string input)
         {
-            var jsonSerializer = new JsonSerializer()
+            var jsonSerializer = new JsonSerializer
             {
                 NullValueHandling = nullValueHandling,
                 ContractResolver = camelCase ? new CamelCasePropertyNamesContractResolver() : new DefaultContractResolver()
@@ -78,6 +78,50 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
             var message = protocol.ParseMessage(Encoding.UTF8.GetBytes(input), binder);
 
             Assert.Equal(expectedMessage, message, TestEqualityComparer.Instance);
+        }
+
+        [Theory]
+        [InlineData("", "Error reading JSON.")]
+        [InlineData("null", "Unexpected JSON Token Type 'Null'. Expected a JSON Object.")]
+        [InlineData("42", "Unexpected JSON Token Type 'Integer'. Expected a JSON Object.")]
+        [InlineData("'foo'", "Unexpected JSON Token Type 'String'. Expected a JSON Object.")]
+        [InlineData("[42]", "Unexpected JSON Token Type 'Array'. Expected a JSON Object.")]
+        [InlineData("{}", "Missing required property 'type'.")]
+
+        [InlineData("{'type':1}", "Missing required property 'invocationId'.")]
+        [InlineData("{'type':1,'invocationId':42}", "Expected 'invocationId' to be of type String.")]
+        [InlineData("{'type':1,'invocationId':'42','target':42}", "Expected 'target' to be of type String.")]
+        [InlineData("{'type':1,'invocationId':'42','target':'foo'}", "Missing required property 'arguments'.")]
+        [InlineData("{'type':1,'invocationId':'42','target':'foo','arguments':{}}", "Expected 'arguments' to be of type Array.")]
+
+        [InlineData("{'type':2}", "Missing required property 'invocationId'.")]
+        [InlineData("{'type':2,'invocationId':42}", "Expected 'invocationId' to be of type String.")]
+        [InlineData("{'type':2,'invocationId':'42'}", "Missing required property 'result'.")]
+
+        [InlineData("{'type':3}", "Missing required property 'invocationId'.")]
+        [InlineData("{'type':3,'invocationId':42}", "Expected 'invocationId' to be of type String.")]
+        [InlineData("{'type':3,'invocationId':'42','error':[]}", "Expected 'error' to be of type String.")]
+
+        [InlineData("{'type':4}", "Unknown message type: 4")]
+        [InlineData("{'type':'foo'}", "Expected 'type' to be of type Integer.")]
+        public void InvalidMessages(string input, string expectedMessage)
+        {
+            var binder = new TestBinder();
+            var protocol = new JsonHubProtocol(new JsonSerializer());
+            var ex = Assert.Throws<FormatException>(() => protocol.ParseMessage(Encoding.UTF8.GetBytes(input), binder));
+            Assert.Equal(expectedMessage, ex.Message);
+        }
+
+        [Theory]
+        [InlineData("{'type':1,'invocationId':'42','target':'foo','arguments':[]}", "Invocation provides 0 argument(s) but target expects 2.")]
+        [InlineData("{'type':1,'invocationId':'42','target':'foo','arguments':[42, 'foo'],'nonBlocking':42}", "Expected 'nonBlocking' to be of type Boolean.")]
+        [InlineData("{'type':3,'invocationId':'42','error':'foo','result':true}", "The 'error' and 'result' properties are mutually exclusive.")]
+        public void InvalidMessagesWithBinder(string input, string expectedMessage)
+        {
+            var binder = new TestBinder(paramTypes: new[] { typeof(int), typeof(string) }, returnType: typeof(bool));
+            var protocol = new JsonHubProtocol(new JsonSerializer());
+            var ex = Assert.Throws<FormatException>(() => protocol.ParseMessage(Encoding.UTF8.GetBytes(input), binder));
+            Assert.Equal(expectedMessage, ex.Message);
         }
 
         private class CustomObject : IEquatable<CustomObject>
@@ -106,6 +150,7 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
 
             public bool Equals(CustomObject right)
             {
+                // This allows the comparer below to properly compare the object in the test.
                 return string.Equals(StringProp, right.StringProp, StringComparison.Ordinal) &&
                     DoubleProp == right.DoubleProp &&
                     IntProp == right.IntProp &&
@@ -117,33 +162,50 @@ namespace Microsoft.AspNetCore.SignalR.Common.Tests.Internal.Protocol
         // Binder that works based on the expected message argument/result types :)
         private class TestBinder : IInvocationBinder
         {
-            private HubMessage _expectedMessage;
+            private readonly Type[] _paramTypes;
+            private readonly Type _returnType;
 
             public TestBinder(HubMessage expectedMessage)
             {
-                _expectedMessage = expectedMessage;
+                switch(expectedMessage)
+                {
+                    case InvocationMessage i:
+                        _paramTypes = i.Arguments.Select(a => a.GetType()).ToArray();
+                        break;
+                    case StreamItemMessage s:
+                        _returnType = s.Item.GetType();
+                        break;
+                    case CompletionMessage c:
+                        _returnType = c.Result.GetType();
+                        break;
+                }
+            }
+
+            public TestBinder() : this(null, null) { }
+            public TestBinder(Type[] paramTypes) : this(paramTypes, null) { }
+            public TestBinder(Type returnType) : this(null, returnType) {}
+            public TestBinder(Type[] paramTypes, Type returnType)
+            {
+                _paramTypes = paramTypes;
+                _returnType = returnType;
             }
 
             public Type[] GetParameterTypes(string methodName)
             {
-                if (_expectedMessage is InvocationMessage m)
+                if (_paramTypes != null)
                 {
-                    return m.Arguments.Select(a => a == null ? typeof(object) : a.GetType()).ToArray();
+                    return _paramTypes;
                 }
                 throw new InvalidOperationException("Unexpected binder call");
             }
 
             public Type GetReturnType(string invocationId)
             {
-                switch (_expectedMessage)
+                if (_returnType != null)
                 {
-                    case CompletionMessage m:
-                        return m.Result?.GetType() ?? typeof(object);
-                    case StreamItemMessage m:
-                        return m.Item?.GetType() ?? typeof(object);
-                    default:
-                        throw new InvalidOperationException("Unexpected binder call");
+                    return _returnType;
                 }
+                throw new InvalidOperationException("Unexpected binder call");
             }
         }
 
